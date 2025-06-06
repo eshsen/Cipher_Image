@@ -6,85 +6,349 @@
 #pragma pack(push, 1)
 typedef struct
 {
-    char signature[2];       // Подпись файла (должна быть "BM")
-    unsigned int fileSize;   // Размер файла в байтах
-    unsigned int reserved;   // Зарезервировано (обычно 0)
-    unsigned int dataOffset; // Смещение данных изображения от начала файла
-} BMPHeader;
+    unsigned short bfType;
+    unsigned int bfSize;
+    unsigned short bfReserved1;
+    unsigned short bfReserved2;
+    unsigned int bfOffBits;
+} BITMAPFILEHEADER;
 
 typedef struct
 {
-    unsigned int headerSize;      // Размер этого заголовка (обычно 40 байт)
-    int width;                    // Ширина изображения в пикселях
-    int height;                   // Высота изображения в пикселях
-    unsigned short planes;        // Количество цветовых плоскостей (должно быть 1)
-    unsigned short bitsPerPixel;  // Глубина цвета (например, 24)
-    unsigned int compression;     // Тип сжатия (0 — без сжатия)
-    unsigned int dataSize;        // Размер данных изображения в байтах
-    int xResolution;              // Горизонтальное разрешение
-    int yResolution;              // Вертикальное разрешение
-    unsigned int colors;          // Количество используемых цветов
-    unsigned int importantColors; // Количество важных цветов
-} BMPInfoHeader;
+    unsigned int biSize;
+    int biWidth;
+    int biHeight;
+    unsigned short biPlanes;
+    unsigned short biBitCount;
+    unsigned int biCompression;
+    unsigned int biSizeImage;
+    int biXPelsPerMeter;
+    int biYPelsPerMeter;
+    unsigned int biClrUsed;
+    unsigned int biClrImportant;
+} BITMAPINFOHEADER;
 #pragma pack(pop)
 
-/**
- * @brief Встраивает текст в изображение, начиная с указанной позиции.
- *
- * Эта функция записывает длину текста (в битах) и сам текст, побитно,
- * начиная с позиции startPos в массив imageData.
- *
- * @param imageData Указатель на массив байтов данных изображения.
- * @param dataSize Размер массива imageData в байтах.
- * @param text Строка текста для скрытия.
- * @param startPos Начальная позиция в массиве imageData для вставки.
- */
-void embedText(unsigned char *imageData, int dataSize, const char *text, int startPos)
+typedef struct
 {
-    int textLen = strlen(text);
-    for (int i = 0; i < 32; i++)
+    unsigned char b, g, r;
+} PIXEL;
+
+typedef struct
+{
+    BITMAPFILEHEADER fileHeader;
+    BITMAPINFOHEADER infoHeader;
+    PIXEL *pixels;
+} BMP_IMAGE;
+
+/**
+ * @brief Загружает BMP-изображение из файла.
+ *
+ * Эта функция открывает указанный BMP-файл, считывает заголовки файла и изображения,
+ * а также загружает пиксели изображения в динамически выделенную память.
+ *
+ * @param filename Путь к файлу BMP, который необходимо загрузить.
+ * @return Указатель на структуру BMP_IMAGE, содержащую загруженное изображение,
+ *         или NULL в случае ошибки.
+ */
+BMP_IMAGE *load__bmp(const char *filename)
+{
+    FILE *file = fopen(filename, "rb");
+    if (!file)
     {
-        int bit = (textLen >> i) & 1;
-        if (startPos + i >= dataSize)
-        {
-            fprintf(stderr, "Error: Out of bounds during length embedding at index %d\n", startPos + i);
-            return;
-        }
-        imageData[startPos + i] = (imageData[startPos + i] & 0xFE) | bit;
+        printf("Error: Cannot open file %s\n", filename);
+        return NULL;
     }
-    int currentByteIndex = startPos + 32;
-    for (int i = 0; i < textLen; i++)
+
+    BMP_IMAGE *img = malloc(sizeof(BMP_IMAGE));
+    if (!img)
     {
-        for (int j = 0; j < 8; j++)
+        fclose(file);
+        return NULL;
+    }
+
+    fread(&img->fileHeader, sizeof(BITMAPFILEHEADER), 1, file);
+    fread(&img->infoHeader, sizeof(BITMAPINFOHEADER), 1, file);
+
+    if (img->fileHeader.bfType != 0x4D42 || img->infoHeader.biBitCount != 24)
+    {
+        printf("Error: Only 24-bit BMP files are supported\n");
+        free(img);
+        fclose(file);
+        return NULL;
+    }
+
+    int imageSize = img->infoHeader.biWidth * img->infoHeader.biHeight;
+    img->pixels = malloc(imageSize * sizeof(PIXEL));
+
+    fseek(file, img->fileHeader.bfOffBits, SEEK_SET);
+
+    int padding = (4 - (img->infoHeader.biWidth * 3) % 4) % 4;
+    for (int y = 0; y < img->infoHeader.biHeight; y++)
+    {
+        fread(&img->pixels[y * img->infoHeader.biWidth], sizeof(PIXEL), img->infoHeader.biWidth, file);
+        fseek(file, padding, SEEK_CUR);
+    }
+
+    fclose(file);
+    return img;
+}
+
+/**
+ * @brief Сохраняет BMP-изображение в файл.
+ *
+ * Эта функция создает новый BMP-файл и записывает в него заголовки и пиксели,
+ * представляющие изображение.
+ *
+ * @param filename Путь к файлу, в который необходимо сохранить изображение.
+ * @param img Указатель на структуру BMP_IMAGE, содержащую изображение для сохранения.
+ * @return 1 в случае успешного сохранения, 0 в случае ошибки.
+ */
+int save__bmp(const char *filename, BMP_IMAGE *img)
+{
+    FILE *file = fopen(filename, "wb");
+    if (!file)
+    {
+        printf("Error: Cannot create file %s\n", filename);
+        return 0;
+    }
+
+    fwrite(&img->fileHeader, sizeof(BITMAPFILEHEADER), 1, file);
+    fwrite(&img->infoHeader, sizeof(BITMAPINFOHEADER), 1, file);
+
+    int padding = (4 - (img->infoHeader.biWidth * 3) % 4) % 4;
+    unsigned char paddingBytes[3] = {0, 0, 0};
+
+    for (int y = 0; y < img->infoHeader.biHeight; y++)
+    {
+        fwrite(&img->pixels[y * img->infoHeader.biWidth], sizeof(PIXEL), img->infoHeader.biWidth, file);
+        if (padding > 0)
         {
-            int bit = (text[i] >> j) & 1;
-            if (currentByteIndex >= dataSize)
+            fwrite(paddingBytes, 1, padding, file);
+        }
+    }
+
+    fclose(file);
+    return 1;
+}
+
+/**
+ * @brief Устанавливает значение бита в байте.
+ *
+ * Эта функция устанавливает указанный бит в байте в заданное значение (0 или 1).
+ *
+ * @param byte Указатель на байт, в котором нужно установить бит.
+ * @param bit Индекс бита, который нужно установить (0 - младший бит).
+ * @param value Значение, которым нужно установить бит (0 или 1).
+ */
+void set__bit(unsigned char *byte, int bit, int value)
+{
+    if (value)
+    {
+        *byte |= (1 << bit);
+    }
+    else
+    {
+        *byte &= ~(1 << bit);
+    }
+}
+
+/**
+ * @brief Получает значение бита из байта.
+ *
+ * Эта функция возвращает значение указанного бита в байте.
+ *
+ * @param byte Байтовое значение, из которого нужно получить бит.
+ * @param bit Индекс бита, который нужно получить (0 - младший бит).
+ * @return Значение бита (0 или 1).
+ */
+int get__bit(unsigned char byte, int bit)
+{
+    return (byte >> bit) & 1;
+}
+
+/**
+ * @brief Скрывает сообщение в изображении BMP.
+ *
+ * Эта функция встраивает заданное сообщение в пиксели изображения, изменяя
+ * младший бит каждого цветового канала пикселей для кодирования символов
+ * сообщения. Сообщение представляет собой строку символов и заканчивается
+ * нулевым символом.
+ *
+ * @param img Указатель на структуру BMP_IMAGE, в которую будет встроено сообщение.
+ * @param message Указатель на строку символов, содержащую сообщение для скрытия.
+ * @param startX Координата X начала встраивания сообщения в изображение.
+ * @param startY Координата Y начала встраивания сообщения в изображение.
+ *
+ * @note Если сообщение слишком длинное для изображения, начиная с указанной позиции,
+ * функция выведет сообщение об ошибке и завершит выполнение.
+ */
+void hideMessage(BMP_IMAGE *img, const char *message, int startX, int startY)
+{
+    int messageLen = strlen(message);
+    int totalBits = (messageLen + 1) * 8; // +1 for null terminator
+    int imageSize = img->infoHeader.biWidth * img->infoHeader.biHeight;
+    int startIndex = startY * img->infoHeader.biWidth + startX;
+
+    if (startIndex + (totalBits / 3) >= imageSize)
+    {
+        printf("Error: Message too long for image starting at this position\n");
+        return;
+    }
+
+    int bitIndex = 0;
+    for (int i = 0; i < messageLen + 1; i++)
+    {
+        char ch = (i < messageLen) ? message[i] : '\0';
+
+        for (int bit = 0; bit < 8; bit++)
+        {
+            int pixelIndex = startIndex + (bitIndex / 3);
+            int colorChannel = bitIndex % 3;
+
+            unsigned char *color;
+            switch (colorChannel)
             {
-                fprintf(stderr, "Error: Out of bounds during text embedding at index %d\n", currentByteIndex);
-                return;
+            case 0:
+                color = &img->pixels[pixelIndex].r;
+                break;
+            case 1:
+                color = &img->pixels[pixelIndex].g;
+                break;
+            case 2:
+                color = &img->pixels[pixelIndex].b;
+                break;
             }
-            imageData[currentByteIndex] = (imageData[currentByteIndex] & 0xFE) | bit;
-            currentByteIndex++;
+
+            set__bit(color, 0, (ch >> bit) & 1);
+            bitIndex++;
         }
     }
 }
 
 /**
- * @brief Основная функция для шифрования текста в BMP изображение.
+ * @brief Извлекает скрытое сообщение из BMP-изображения, начиная с заданных координат.
  *
- * Загружает BMP файл, вставляет скрытый текст и сохраняет результат,
- * а также сохраняет ключ позиции вставки.
+ * Эта функция читает битовые данные, закодированные в цветовых компонентах пикселей изображения,
+ * начиная с позиции (startX, startY), и восстанавливает исходное сообщение длиной messageLen.
  *
- * @return Возвращает 0 при успешном завершении, иначе — код ошибки.
+ * @param img Указатель на структуру BMP_IMAGE, содержащую изображение.
+ * @param startX Координата X начальной точки извлечения сообщения.
+ * @param startY Координата Y начальной точки извлечения сообщения.
+ * @param messageLen Длина сообщения в символах (в байтах).
+ * @return Указатель на строку с извлечённым сообщением. Необходимо освободить память после использования.
+ */
+char *extractMessage(BMP_IMAGE *img, int startX, int startY, int messageLen)
+{
+    char *message = malloc(messageLen + 1);
+    int startIndex = startY * img->infoHeader.biWidth + startX;
+    int bitIndex = 0;
+
+    for (int i = 0; i < messageLen + 1; i++)
+    {
+        char ch = 0;
+
+        for (int bit = 0; bit < 8; bit++)
+        {
+            int pixelIndex = startIndex + (bitIndex / 3);
+            int colorChannel = bitIndex % 3;
+
+            unsigned char color;
+            switch (colorChannel)
+            {
+            case 0:
+                color = img->pixels[pixelIndex].r;
+                break;
+            case 1:
+                color = img->pixels[pixelIndex].g;
+                break;
+            case 2:
+                color = img->pixels[pixelIndex].b;
+                break;
+            }
+
+            if (get__bit(color, 0))
+            {
+                ch |= (1 << bit);
+            }
+            bitIndex++;
+        }
+
+        message[i] = ch;
+        if (ch == '\0')
+            break;
+    }
+
+    return message;
+}
+
+/**
+ * @brief Сохраняет координаты и длину скрытого сообщения в файл "color_key".
+ *
+ * Эта функция записывает информацию о позиции начала скрытого сообщения и его длине,
+ * чтобы позже можно было восстановить сообщение из изображения.
+ *
+ * @param x Координата X начальной точки скрытия сообщения.
+ * @param y Координата Y начальной точки скрытия сообщения.
+ * @param messageLen Длина скрытого сообщения в символах.
+ */
+void saveColorKey(int x, int y, int messageLen)
+{
+    FILE *file = fopen("color_key", "w");
+    if (!file)
+    {
+        printf("Error: Cannot create color_key file\n");
+        return;
+    }
+
+    fprintf(file, "%d %d %d\n", x, y, messageLen);
+    fclose(file);
+}
+
+/**
+ * @brief Загружает координаты и длину скрытого сообщения из файла "color_key".
+ *
+ * Эта функция читает сохранённую информацию о позиции начала и длине сообщения,
+ * чтобы можно было извлечь сообщение из изображения.
+ *
+ * @param x Указатель на переменную для хранения координаты X.
+ * @param y Указатель на переменную для хранения координаты Y.
+ * @param messageLen Указатель на переменную для хранения длины сообщения.
+ * @return 1 при успешном чтении, 0 при ошибке.
+ */
+int loadColorKey(int *x, int *y, int *messageLen)
+{
+    FILE *file = fopen("color_key", "r");
+    if (!file)
+    {
+        printf("Error: Cannot open color_key file\n");
+        return 0;
+    }
+
+    if (fscanf(file, "%d %d %d", x, y, messageLen) != 3)
+    {
+        printf("Error: Invalid color_key file format\n");
+        fclose(file);
+        return 0;
+    }
+
+    fclose(file);
+    return 1;
+}
+
+/**
+ * @brief Выполняет процесс шифрования сообщения в BMP-изображение с сохранением ключа.
+ *
+ * Эта функция запрашивает у пользователя исходное BMP-изображение, сообщение для скрытия,
+ * генерирует случайную стартовую позицию для вставки сообщения, шифрует сообщение,
+ * сохраняет ключ (координаты и длину сообщения) в файл "color_key",
+ * сохраняет полученное изображение с внедренным сообщением в указанный файл.
+ *
+ * @return Возвращает 0 при успешном выполнении, или 1 при возникновении ошибок.
  */
 int color()
 {
-    FILE *file, *keyFile, *outputFile;
-    BMPHeader header;
-    BMPInfoHeader infoHeader;
-    unsigned char *imageData;
-    char filename[256], outputFilename[256], text[101];
-    int startPos;
+    char filename[256], message[1000], outputFileName[256];
 
     printf("\nBMP Image Text Encryption\n");
     printf("=========================\n\n");
@@ -92,110 +356,52 @@ int color()
     printf("Enter BMP filename: ");
     scanf("%s", filename);
 
-    file = fopen(filename, "rb");
-    if (!file)
-    {
-        printf("Error: Cannot open file %s\n", filename);
-        return 1;
-    }
+    BMP_IMAGE *img = load__bmp(filename);
+    if (!img)
+        return 1; // Ошибка при загрузке изображения
 
-    fread(&header, sizeof(BMPHeader), 1, file);
-    fread(&infoHeader, sizeof(BMPInfoHeader), 1, file);
-
-    if (header.signature[0] != 'B' || header.signature[1] != 'M')
-    {
-        printf("Error: Not a valid BMP file\n");
-        fclose(file);
-        return 1;
-    }
-
-    if (infoHeader.bitsPerPixel != 24)
-    {
-        printf("Error: Only 24-bit BMP files are supported\n");
-        fclose(file);
-        return 1;
-    }
-
-    int imageDataSize = infoHeader.width * infoHeader.height * 3;
-
-    imageData = (unsigned char *)malloc(imageDataSize);
-
-    fseek(file, header.dataOffset, SEEK_SET);
-
-    fread(imageData, 1, imageDataSize, file);
-
-    fclose(file);
-
-    printf("Enter text to encrypt (max 100 characters): ");
-
-    scanf(" %[^\n]", text);
-
-    if (strlen(text) > 100)
-    {
-        printf("Text too long! Maximum 100 characters allowed.\n");
-        free(imageData);
-        return 1;
-    }
-
-    int requiredBits = (strlen(text) * 8) + 32;
-
-    int requiredBytes = (requiredBits + 7) / 8;
-
-    if (requiredBytes > imageDataSize)
-    {
-        printf("Error: Image too small to hold the text.\n");
-        printf("Required %d bytes, available %d bytes in image data.\n", requiredBytes, imageDataSize);
-        free(imageData);
-        return 1;
-    }
+    printf("\nImage loaded successfully!\n");
+    printf("Enter message to hide: ");
+    getchar(); // consume leftover newline
+    fgets(message, sizeof(message), stdin);
+    message[strcspn(message, "\n")] = '\0'; // удаление символа новой строки
 
     srand(time(NULL));
-    int maxPossibleStartPos = imageDataSize - requiredBytes;
+    int maxX = img->infoHeader.biWidth - 1;
+    int maxY = img->infoHeader.biHeight - 1;
+    int startX = rand() % maxX;
+    int startY = rand() % maxY;
 
-    if (maxPossibleStartPos < 0)
+    int messageLen = strlen(message);
+    int requiredPixels = ((messageLen + 1) * 8 + 2) / 3;
+
+    // Проверка, чтобы сообщение поместилось в изображение
+    if (startY * img->infoHeader.biWidth + startX + requiredPixels >=
+        img->infoHeader.biWidth * img->infoHeader.biHeight)
     {
-        printf("Internal error: Calculated maxPossibleStartPos is negative. Image is too small.\n");
-        free(imageData);
-        return 1;
+        startX = 0;
+        startY = 0;
     }
 
-    startPos = rand() % (maxPossibleStartPos + 1);
-
-    embedText(imageData, imageDataSize, text, startPos);
-
-    keyFile = fopen("color_key", "w");
-    if (keyFile)
-    {
-        fprintf(keyFile, "%d", startPos);
-        fclose(keyFile);
-        printf("\nKey saved to 'color_key' file\n");
-    }
-    else
-    {
-        printf("Error: Could not open color_key file for writing.\n");
-        free(imageData);
-        return 1;
-    }
+    hideMessage(img, message, startX, startY);
+    saveColorKey(startX, startY, messageLen);
 
     printf("Enter output filename: ");
-    scanf("%s", outputFilename);
+    scanf("%s", outputFileName);
 
-    outputFile = fopen(outputFilename, "wb");
-    if (outputFile)
+    if (save__bmp(outputFileName, img))
     {
-        fwrite(&header, sizeof(BMPHeader), 1, outputFile);
-        fwrite(&infoHeader, sizeof(BMPInfoHeader), 1, outputFile);
-        fseek(outputFile, header.dataOffset, SEEK_SET);
-        fwrite(imageData, 1, imageDataSize, outputFile);
-        fclose(outputFile);
-        printf("Encrypted image saved as %s\n", outputFilename);
+        printf("\nImage saved as %s\n", outputFileName);
+        printf("Key information saved to 'color_key' file.\n");
+        free(img->pixels);
+        free(img);
+        return 0; // Успешное завершение
     }
     else
     {
-        printf("Error: Could not open output file %s for writing.\n", outputFilename);
+        printf("Failed to save the image.\n");
+        free(img->pixels);
+        free(img);
+        return 1; // Ошибка при сохранении файла
     }
-
-    free(imageData);
-
-    return 0;
 }
