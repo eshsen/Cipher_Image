@@ -227,62 +227,6 @@ void hideMessage(BMP_IMAGE *img, const char *message, int startX, int startY)
 }
 
 /**
- * @brief Извлекает скрытое сообщение из BMP-изображения, начиная с заданных координат.
- *
- * Эта функция читает битовые данные, закодированные в цветовых компонентах пикселей изображения,
- * начиная с позиции (startX, startY), и восстанавливает исходное сообщение длиной messageLen.
- *
- * @param img Указатель на структуру BMP_IMAGE, содержащую изображение.
- * @param startX Координата X начальной точки извлечения сообщения.
- * @param startY Координата Y начальной точки извлечения сообщения.
- * @param messageLen Длина сообщения в символах (в байтах).
- * @return Указатель на строку с извлечённым сообщением. Необходимо освободить память после использования.
- */
-char *extractMessage(BMP_IMAGE *img, int startX, int startY, int messageLen)
-{
-    char *message = malloc(messageLen + 1);
-    int startIndex = startY * img->infoHeader.biWidth + startX;
-    int bitIndex = 0;
-
-    for (int i = 0; i < messageLen + 1; i++)
-    {
-        char ch = 0;
-
-        for (int bit = 0; bit < 8; bit++)
-        {
-            int pixelIndex = startIndex + (bitIndex / 3);
-            int colorChannel = bitIndex % 3;
-
-            unsigned char color;
-            switch (colorChannel)
-            {
-            case 0:
-                color = img->pixels[pixelIndex].r;
-                break;
-            case 1:
-                color = img->pixels[pixelIndex].g;
-                break;
-            case 2:
-                color = img->pixels[pixelIndex].b;
-                break;
-            }
-
-            if (get__bit(color, 0))
-            {
-                ch |= (1 << bit);
-            }
-            bitIndex++;
-        }
-
-        message[i] = ch;
-        if (ch == '\0')
-            break;
-    }
-
-    return message;
-}
-
-/**
  * @brief Сохраняет координаты и длину скрытого сообщения в файл "color_key".
  *
  * Эта функция записывает информацию о позиции начала скрытого сообщения и его длине,
@@ -303,37 +247,6 @@ void saveColorKey(int x, int y, int messageLen)
 
     fprintf(file, "%d %d %d\n", x, y, messageLen);
     fclose(file);
-}
-
-/**
- * @brief Загружает координаты и длину скрытого сообщения из файла "color_key".
- *
- * Эта функция читает сохранённую информацию о позиции начала и длине сообщения,
- * чтобы можно было извлечь сообщение из изображения.
- *
- * @param x Указатель на переменную для хранения координаты X.
- * @param y Указатель на переменную для хранения координаты Y.
- * @param messageLen Указатель на переменную для хранения длины сообщения.
- * @return 1 при успешном чтении, 0 при ошибке.
- */
-int loadColorKey(int *x, int *y, int *messageLen)
-{
-    FILE *file = fopen("color_key", "r");
-    if (!file)
-    {
-        printf("Error: Cannot open color_key file\n");
-        return 0;
-    }
-
-    if (fscanf(file, "%d %d %d", x, y, messageLen) != 3)
-    {
-        printf("Error: Invalid color_key file format\n");
-        fclose(file);
-        return 0;
-    }
-
-    fclose(file);
-    return 1;
 }
 
 /**
